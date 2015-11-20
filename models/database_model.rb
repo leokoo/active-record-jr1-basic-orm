@@ -1,11 +1,12 @@
 require 'sqlite3'
 
+require 'byebug'
+
 module Database
   class InvalidAttributeError < StandardError;end
   class NotConnectedError < StandardError;end
 
   class Model
-
   def initialize(attributes = {})
     attributes.symbolize_keys!
     raise_error_if_invalid_attribute!(attributes.keys)
@@ -15,7 +16,6 @@ module Database
     self.class.attribute_names.each do |name|
       @attributes[name] = attributes[name]
     end
-
     @old_attributes = @attributes.dup
   end
 
@@ -42,6 +42,65 @@ module Database
     raise_error_if_invalid_attribute!(attribute)
 
     @attributes[attribute] = value
+  end
+
+  def self.all
+    Database::Model.execute("SELECT * FROM #{self.to_s.downcase}s").map do |row|
+      self.new(row)
+    end
+  end
+
+  def self.create(attributes)
+    record = self.new(attributes)
+    record.save
+
+    record
+  end
+
+  def self.where(query, *args)
+    Database::Model.execute("SELECT * FROM #{self.to_s.downcase}s WHERE #{query}", *args).map do |row|
+      self.new(row)
+    end
+  end
+
+  def self.find(pk)
+    self.where('id = ?', pk).first
+  end
+
+  def new_record?
+    self[:id].nil?
+  end
+
+  private
+
+  def insert!
+    self[:created_at] = DateTime.now
+    self[:updated_at] = DateTime.now
+
+    fields = self.attributes.keys
+    values = self.attributes.values
+    marks  = Array.new(fields.length) { '?' }.join(',')
+
+    insert_sql = "INSERT INTO #{self.class.to_s.downcase}s (#{fields.join(',')}) VALUES (#{marks})"
+
+    results = Database::Model.execute(insert_sql, *values)
+
+    # This fetches the new primary key and updates this instance
+    self[:id] = Database::Model.last_insert_row_id
+    results
+  end
+
+  def update!
+    self[:updated_at] = DateTime.now
+
+    fields = self.attributes.keys
+    values = self.attributes.values
+
+    update_clause = fields.map { |field| "#{field} = ?" }.join(',')
+    update_sql = "UPDATE #{self.class.to_s.downcase}s SET #{update_clause} WHERE id = ?"
+
+    # We have to use the (potentially) old ID attribute in case the user has re-set it.
+    Database::Model.execute(update_sql, *values, self.old_attributes[:id])
   end
 
     def self.inherited(klass)
